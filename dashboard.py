@@ -2,150 +2,322 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import pickle
-from datetime import datetime, timedelta
-import seaborn as sns
 import matplotlib.pyplot as plt
+import seaborn as sns
+from datetime import datetime, timedelta
+
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_absolute_error, r2_score
 
-# Load Model
+# PAGE CONFIGURATION
+
+st.set_page_config(
+    page_title="Steel Plant Energy Analytics Dashboard",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
+# GLOBAL CONSTANTS
+
+DATA_FILE = "steel_plant_3_years_weather_extended.csv"
+MODEL_FILE = "model.pkl"
+
+# UTILITY FUNCTIONS
+
+def show_section_header(title):
+    """
+    Utility function to display section headers
+    consistently across the dashboard.
+    """
+    st.markdown(f"## {title}")
+    st.markdown("---")
+
+
+def format_metric(value):
+    """
+    Format numerical metrics for clean display.
+    """
+    return f"{value:,.2f}"
+
+
+# LOAD MACHINE LEARNING MODEL
 
 @st.cache_resource
 def load_model():
-    with open("model.pkl", "rb") as f:
-        return pickle.load(f)
+    """
+    Loads the trained ML pipeline from disk.
+    The pipeline includes preprocessing and model.
+    """
+    with open(MODEL_FILE, "rb") as f:
+        model = pickle.load(f)
+    return model
 
-# Load Data
+# LOAD DATASET
+
 @st.cache_data
 def load_data():
-    df = pd.read_csv("Production_energy_2021_2025.csv")
+    """
+    Loads historical energy dataset and performs
+    basic preprocessing like date parsing and sorting.
+    """
+    df = pd.read_csv(DATA_FILE)
     df["Date"] = pd.to_datetime(df["Date"])
     df = df.sort_values("Date")
     return df
 
-# Feature Engineering
 
-def add_features(df):
+# FEATURE ENGINEERING
+
+def add_time_features(df):
+    """
+    Extracts time-based features from Date column.
+    These features help the ML model learn seasonality.
+    """
+    df["Year"] = df["Date"].dt.year
     df["Month"] = df["Date"].dt.month
     df["Day"] = df["Date"].dt.day
-    df["Year"] = df["Date"].dt.year
     df["DayOfWeek"] = df["Date"].dt.dayofweek
     return df
 
 
-# Predict Future
+def add_energy_kpis(df):
+    """
+    Adds domain-specific KPIs such as
+    energy intensity per ton of production.
+    """
+    df["Energy_per_Ton"] = (
+        df["Electricity_Consumption_MWh"] / df["Production_Tons"]
+    ).round(3)
+    return df
 
-def predict_future(model, days=7):
+
+# DATA QUALITY CHECKS
+
+def data_quality_report(df):
+    """
+    Generates data quality indicators.
+    """
+    report = {
+        "Total Records": len(df),
+        "Missing Values": int(df.isnull().sum().sum()),
+        "Duplicate Rows": int(df.duplicated().sum()),
+        "Date Range": f"{df['Date'].min().date()} to {df['Date'].max().date()}"
+    }
+    return report
+
+
+# FUTURE PREDICTION LOGIC
+
+def predict_future_energy(model, days, scenario="Normal"):
+    """
+    Predicts future electricity consumption based on
+    selected scenario assumptions.
+    """
+
     today = datetime.today()
-    future_dates = [(today + timedelta(days=i)).strftime("%Y-%m-%d") for i in range(1, days+1)]
+    future_dates = [today + timedelta(days=i) for i in range(1, days + 1)]
+
+    # Scenario adjustments
+    if scenario == "High Production":
+        prod_range = (600, 700)
+        temp_range = (30, 42)
+    elif scenario == "Low Production":
+        prod_range = (400, 500)
+        temp_range = (20, 32)
+    else:
+        prod_range = (480, 620)
+        temp_range = (25, 38)
 
     df_future = pd.DataFrame({
-        "Production_Tons": np.random.uniform(450, 600, days),
-        "Temperature_Celsius": np.random.uniform(25, 40, days),
+        "Production_Tons": np.random.uniform(*prod_range, days),
+        "Temperature_Celsius": np.random.uniform(*temp_range, days),
         "Humidity_Percent": np.random.uniform(40, 80, days),
         "Weather_Condition": ["Sunny"] * days,
         "Shift": ["Morning"] * days,
         "Downtime_Hours": np.random.uniform(0, 3, days),
-        "Month": [today.month] * days,
-        "Day": list(range(1, days+1)),
-        "Year": [today.year] * days,
-        "DayOfWeek": list(range(1, days+1))
+        "Year": [d.year for d in future_dates],
+        "Month": [d.month for d in future_dates],
+        "Day": [d.day for d in future_dates],
+        "DayOfWeek": [d.weekday() for d in future_dates]
     })
 
-    preds = model.predict(df_future)
-    preds = [round(float(p), 2) for p in preds]
+    predictions = model.predict(df_future)
 
-    return pd.DataFrame({
-        "Date": future_dates,
-        "Predicted_Energy_MWh": preds
+    result = pd.DataFrame({
+        "Date": [d.strftime("%Y-%m-%d") for d in future_dates],
+        "Predicted_Energy_MWh": np.round(predictions, 2)
     })
 
-# Streamlit UI
+    return result
 
-st.title(" Steel Plant Electricity Consumption Dashboard")
+
+# LOAD DATA & MODEL
 
 df = load_data()
-df = add_features(df)
+df = add_time_features(df)
+df = add_energy_kpis(df)
+
 model = load_model()
 
-st.sidebar.header("Dashboard Controls")
-days = st.sidebar.slider("Predict next N days", 3, 30, 7)
+# TITLE & INTRODUCTION
 
-# Show Raw Data
+st.title("Steel Plant Electricity Consumption Analytics Dashboard")
 
-st.subheader(" Dataset Preview")
-st.dataframe(df.head(748))
+st.markdown("""
+### Project Overview
 
-# Graphs Section
+This dashboard is developed as part of the **Energy Conservation Analysis and Prediction** project.
+It analyzes historical electricity consumption data of a steel plant and predicts future energy
+requirements using **Machine Learning (Random Forest Regression)**.
 
-st.subheader(" Electricity Consumption Over Time")
-st.line_chart(df.set_index("Date")["Electricity_Consumption_MWh"])
+The goal is to assist decision-makers in:
+- Understanding consumption patterns
+- Identifying inefficiencies
+- Planning future energy demand
+""")
 
-st.subheader(" Temperature Over Time")
-st.line_chart(df.set_index("Date")["Temperature_Celsius"])
+# SIDEBAR CONTROLS
 
-st.subheader(" Humidity Over Time")
-st.line_chart(df.set_index("Date")["Humidity_Percent"])
+st.sidebar.header("Control Panel")
 
-st.subheader(" Shift-wise Electricity Consumption")
-shift_avg = df.groupby("Shift")["Electricity_Consumption_MWh"].mean()
-st.bar_chart(shift_avg)
+selected_years = st.sidebar.multiselect(
+    "Select Year(s)",
+    options=sorted(df["Year"].unique()),
+    default=sorted(df["Year"].unique())
+)
 
-st.subheader("Weather Condition Impact on Consumption")
+selected_shifts = st.sidebar.multiselect(
+    "Select Shift(s)",
+    options=df["Shift"].unique(),
+    default=df["Shift"].unique()
+)
 
-weather_avg = df.groupby("Weather_Condition")["Electricity_Consumption_MWh"].mean()
-st.bar_chart(weather_avg)
+scenario = st.sidebar.selectbox(
+    "Prediction Scenario",
+    ["Normal", "High Production", "Low Production"]
+)
 
+prediction_days = st.sidebar.slider(
+    "Predict Future Days",
+    min_value=5,
+    max_value=30,
+    value=10
+)
 
+# Apply filters
+filtered_df = df[
+    (df["Year"].isin(selected_years)) &
+    (df["Shift"].isin(selected_shifts))
+]
 
-# Monthly Trend
-st.subheader(" Monthly Average Electricity Consumption")
-monthly_avg = df.groupby("Month")["Electricity_Consumption_MWh"].mean()
-st.line_chart(monthly_avg)
+# TABS
 
-# Yearly Trend
-st.subheader("Yearly Electricity Consumption Trend")
-yearly_avg = df.groupby("Year")["Electricity_Consumption_MWh"].mean()
-st.line_chart(yearly_avg)
+tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+    "Data Overview",
+    "Trend Analysis",
+    "Statistical Analysis",
+    "Model Performance",
+    "Future Prediction",
+    "Assumptions & Limitations"
+])
 
+# TAB 1: DATA OVERVIEW
 
+with tab1:
+    show_section_header("Dataset Snapshot")
+    st.dataframe(filtered_df.head(300))
 
+    show_section_header("Data Quality Report")
+    quality = data_quality_report(filtered_df)
+    for k, v in quality.items():
+        st.write(f"**{k}:** {v}")
 
-# Model Metrics
+# TAB 2: TREND ANALYSIS
 
-st.subheader(" Model Performance Metrics")
+with tab2:
+    show_section_header("Electricity Consumption Trend")
+    st.line_chart(filtered_df.set_index("Date")["Electricity_Consumption_MWh"])
 
-target = "Electricity_Consumption_MWh"
-X = df.drop(["Date", target], axis=1)
-y = df[target]
+    show_section_header("Production vs Consumption")
+    st.line_chart(filtered_df.set_index("Date")[["Production_Tons", "Electricity_Consumption_MWh"]])
 
-X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
-preds = model.predict(X_test)
+# TAB 3: STATISTICAL ANALYSIS
 
-mae = mean_absolute_error(y_test, preds)
-r2 = r2_score(y_test, preds)
+with tab3:
+    show_section_header("Descriptive Statistics")
+    st.dataframe(filtered_df.describe())
 
-st.metric("Mean Absolute Error (MAE)", f"{mae:.2f}")
-st.metric("R² Score", f"{r2:.3f}")
+    show_section_header("Correlation Heatmap")
+    fig, ax = plt.subplots(figsize=(10, 6))
+    sns.heatmap(
+        filtered_df.select_dtypes(include=np.number).corr(),
+        cmap="coolwarm",
+        annot=False,
+        ax=ax
+    )
+    st.pyplot(fig)
 
+# TAB 4: MODEL PERFORMANCE
 
-# Future Predictions
+with tab4:
+    show_section_header("Model Evaluation")
 
-st.subheader(f" Predicted Electricity Consumption for Next {days} Days")
+    target = "Electricity_Consumption_MWh"
+    X = df.drop(["Date", target], axis=1)
+    y = df[target]
 
-future_df = predict_future(model, days)
-st.dataframe(future_df)
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=0.2, random_state=42
+    )
 
-st.subheader(" Actual vs Predicted (Test Set)")
+    preds = model.predict(X_test)
 
-fig, ax = plt.subplots(figsize=(10, 5))
-ax.scatter(y_test, preds, alpha=0.6)
-ax.set_xlabel("Actual Consumption (MWh)")
-ax.set_ylabel("Predicted Consumption (MWh)")
-ax.set_title("Actual vs Predicted")
-st.pyplot(fig)
+    col1, col2 = st.columns(2)
+    col1.metric("MAE", format_metric(mean_absolute_error(y_test, preds)))
+    col2.metric("R² Score", format_metric(r2_score(y_test, preds)))
 
+    fig, ax = plt.subplots()
+    ax.scatter(y_test, preds, alpha=0.5)
+    ax.set_xlabel("Actual MWh")
+    ax.set_ylabel("Predicted MWh")
+    ax.set_title("Actual vs Predicted Consumption")
+    st.pyplot(fig)
 
-# Download Button
-csv = future_df.to_csv(index=False).encode("utf-8")
-st.download_button("Download Predictions as CSV", csv, "future_predictions.csv", "text/csv")
+# TAB 5: FUTURE PREDICTION
+
+with tab5:
+    show_section_header("Future Energy Consumption Forecast")
+
+    future_df = predict_future_energy(
+        model=model,
+        days=prediction_days,
+        scenario=scenario
+    )
+
+    st.dataframe(future_df)
+    st.line_chart(future_df.set_index("Date")["Predicted_Energy_MWh"])
+
+    csv = future_df.to_csv(index=False).encode("utf-8")
+    st.download_button(
+        "Download Forecast CSV",
+        csv,
+        "future_energy_forecast.csv",
+        "text/csv"
+    )
+
+# TAB 6: ASSUMPTIONS & LIMITATIONS
+
+with tab6:
+    show_section_header("Assumptions")
+    st.markdown("""
+    - Future production and weather data are assumed using realistic ranges
+    - Equipment efficiency is assumed constant
+    - No major policy or infrastructure changes are considered
+    """)
+
+    show_section_header("Limitations")
+    st.markdown("""
+    - Predictions depend on historical patterns
+    - Sudden breakdowns or extreme weather are not modeled
+    - Real-time sensor data is not integrated
+    """)
