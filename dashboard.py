@@ -1,4 +1,4 @@
-#To RUN THE CODE:-  python -m streamlit run app.py
+#To RUN THE CODE:-  python -m streamlit run dashboard.py
 
 
 
@@ -234,4 +234,5 @@ with tab4:
         "future_predictions.csv",
         "text/csv"
     )
+
 
