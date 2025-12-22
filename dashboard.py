@@ -1,4 +1,4 @@
-#Run Using :- python -m streamlit run dashboard.py
+# Run using: python -m streamlit run dashboard.py
 
 import streamlit as st
 import pandas as pd
@@ -8,7 +8,8 @@ import matplotlib.pyplot as plt
 from sklearn.metrics import mean_absolute_error, r2_score
 
 
-# PAGE CONFIG
+
+
 
 st.set_page_config(
     page_title="Steel Plant Energy Analytics",
@@ -17,10 +18,13 @@ st.set_page_config(
 
 MODEL_FILE = "model.pkl"
 TARGET = "Electricity_Consumption_MWh"
+EPS = 1e-8 
+
+
+
 
 
 # UI SAFE FUNCTION
-
 def ui_safe(df):
     df = df.copy()
     for col in df.columns:
@@ -29,7 +33,8 @@ def ui_safe(df):
     return df
 
 
-# LOAD MODEL 
+# LOAD MODEL
+
 
 @st.cache_resource
 def load_model():
@@ -37,7 +42,9 @@ def load_model():
         return pickle.load(f)
 
 
+
 # LOAD DATA
+
 
 @st.cache_data
 def load_data(file):
@@ -48,12 +55,13 @@ def load_data(file):
     return df
 
 
-# BACKTEST ACCURACY 
+
+# BACKTEST FUNCTION
+
 
 def backtest_accuracy(model, df, days):
     test_df = df.iloc[-days:].copy()
 
-  
     X_test = test_df[["Production_Tons"]]
     y_test = test_df[TARGET]
 
@@ -62,26 +70,26 @@ def backtest_accuracy(model, df, days):
     mae = mean_absolute_error(y_test, preds)
     r2 = r2_score(y_test, preds)
 
-    
     smape = np.mean(
         2 * np.abs(preds - y_test) /
-        (np.abs(y_test) + np.abs(preds))
+        (np.abs(y_test) + np.abs(preds) + EPS)
     ) * 100
 
-    accuracy = 100 - smape
+    accuracy = (1 - mae / np.mean(y_test)) * 100
 
-    tolerance = 0.05
-    tolerance_accuracy = (
-        (np.abs(y_test - preds) / y_test) <= tolerance
-    ).mean() * 100
+    tolerance_accuracy = np.mean(
+        np.abs(y_test - preds) / (np.abs(y_test) + EPS) <= 0.05
+    ) * 100
 
     result_df = test_df[["Date", TARGET]].copy()
     result_df["Predicted_Energy_MWh"] = preds.round(2)
 
-    return result_df, mae, r2, accuracy, tolerance_accuracy
+    return result_df, mae, r2, smape, accuracy, tolerance_accuracy
 
 
-# SIDEBAR CONTROLS
+
+
+
 
 st.sidebar.header("Controls")
 
@@ -101,10 +109,8 @@ if uploaded_file is None:
 
 df = load_data(uploaded_file)
 
-
 if shift_selected != "All Shifts" and "Shift" in df.columns:
     df = df[df["Shift"] == shift_selected]
-
 
 years = sorted(df["Date"].dt.year.unique())
 year_selected = st.sidebar.selectbox(
@@ -117,19 +123,22 @@ if year_selected != "All Years":
 
 model = load_model()
 
-# TITLE
+
+
+
+
 
 st.title("Steel Plant Electricity Consumption Dashboard")
 
-st.markdown(
-    """
-    This dashboard analyzes historical electricity consumption
-    and evaluates prediction accuracy using regression metrics.
-    """
-)
+st.markdown("""
+This dashboard analyzes historical electricity consumption
+and evaluates prediction performance using **regression metrics**.
+""")
 
 
-# TABS
+
+
+
 
 tab1, tab2, tab3, tab4 = st.tabs([
     "Data Overview",
@@ -141,12 +150,14 @@ tab1, tab2, tab3, tab4 = st.tabs([
 
 # TAB 1: DATA OVERVIEW
 
+
 with tab1:
     st.subheader("Dataset Preview")
     st.dataframe(ui_safe(df.head(200)))
 
 
 # TAB 2: TRENDS
+
 
 with tab2:
     st.subheader("Electricity Consumption Trend")
@@ -170,6 +181,7 @@ with tab2:
 
 # TAB 3: MODEL PERFORMANCE
 
+
 with tab3:
     st.subheader("Model Performance (Hold-out Test Set)")
 
@@ -182,9 +194,28 @@ with tab3:
 
     preds = model.predict(X_test)
 
-    col1, col2 = st.columns(2)
-    col1.metric("MAE (MWh)", f"{mean_absolute_error(y_test, preds):.2f}")
-    col2.metric("R²", f"{r2_score(y_test, preds):.3f}")
+    mae = mean_absolute_error(y_test, preds)
+    r2 = r2_score(y_test, preds)
+
+    smape = np.mean(
+        2 * np.abs(preds - y_test) /
+        (np.abs(y_test) + np.abs(preds) + EPS)
+    ) * 100
+
+    accuracy = (1 - mae / np.mean(y_test)) * 100
+
+    tolerance_accuracy = np.mean(
+        np.abs(y_test - preds) / (np.abs(y_test) + EPS) <= 0.05
+    ) * 100
+
+    col1, col2, col3 = st.columns(3)
+    col1.metric("MAE (MWh)", f"{mae:.2f}")
+    col2.metric("R²", f"{r2:.3f}")
+    col3.metric("Accuracy (MAE-based %)", f"{accuracy:.2f}")
+
+    col4, col5 = st.columns(2)
+    col4.metric("SMAPE (%)", f"{smape:.2f}")
+    col5.metric("Within ±5% (%)", f"{tolerance_accuracy:.1f}")
 
     fig, ax = plt.subplots(figsize=(6, 5))
     ax.scatter(y_test, preds, alpha=0.6)
@@ -199,24 +230,28 @@ with tab3:
     st.pyplot(fig)
 
 
+
 # TAB 4: PREDICTION ACCURACY
+
 
 with tab4:
     st.subheader("Prediction Accuracy (Recent Data)")
 
     backtest_days = st.slider(
         "Validation Window (Days)",
-        10, min(60, len(df) - 1), 30
+        min_value=10,
+        max_value=min(60, len(df) - 1),
+        value=30
     )
 
-    bt_df, mae, r2, acc, tol_acc = backtest_accuracy(
+    bt_df, mae, r2, smape, acc, tol_acc = backtest_accuracy(
         model, df, backtest_days
     )
 
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("MAE (MWh)", f"{mae:.2f}")
     c2.metric("R²", f"{r2:.3f}")
-    c3.metric("Accuracy (%)", f"{acc:.2f}")
+    c3.metric("Accuracy (MAE-based %)", f"{acc:.2f}")
     c4.metric("Within ±5%", f"{tol_acc:.1f}%")
 
     fig, ax = plt.subplots(figsize=(10, 4))
