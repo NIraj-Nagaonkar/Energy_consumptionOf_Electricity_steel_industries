@@ -16,8 +16,8 @@ y = df["Electricity_Consumption_MWh"]
 
 
 model = RandomForestRegressor(
-    n_estimators=300,
-    random_state=42,
+    n_estimators=100,
+    random_state=20,
     n_jobs=-1
 )
 
